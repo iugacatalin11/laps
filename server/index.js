@@ -204,31 +204,19 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
 
         let password = null;
 
-        if (os === 'macos') {
-            // macOS: local admin password stored in Intune via configMgr/Intune LAPS
-            // Retrieve via Intune managedDevice action
-            console.log(`[LAPS] macOS device - fetching from Intune managedDevice`);
-            const macResult = await callGraphBeta(`/deviceManagement/managedDevices/${deviceId}?$select=id,deviceName,hardwareInformation`);
-            console.log(`[LAPS] macOS hardwareInformation: ${JSON.stringify(macResult?.hardwareInformation)}`);
+        // Both Windows and macOS LAPS store credentials in Entra ID directory
+        console.log(`[LAPS] OS: ${os} - fetching from Entra deviceLocalCredentials`);
+        const lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
+        console.log(`[LAPS] lapsResult keys: ${JSON.stringify(Object.keys(lapsResult || {}))}`);
+        console.log(`[LAPS] credentials: ${JSON.stringify(lapsResult?.credentials)}`);
 
-            // Try the dedicated macOS local admin password endpoint
-            const macPassResult = await callGraphBeta(`/deviceManagement/managedDevices/${deviceId}/retrieveLocalAdminPassword`);
-            console.log(`[LAPS] macOS password result: ${JSON.stringify(macPassResult)}`);
-
-            password = macPassResult?.localAdminPassword || macPassResult?.password || null;
-        } else {
-            // Windows: LAPS password stored in Entra ID
-            console.log(`[LAPS] Windows device - fetching from Entra deviceLocalCredentials`);
-            const lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
-
-            if (lapsResult?.credentials?.length > 0) {
-                const latestCred = lapsResult.credentials.sort(
-                    (a, b) => new Date(b.backupDateTime) - new Date(a.backupDateTime)
-                )[0];
-                password = latestCred.passwordBase64
-                    ? Buffer.from(latestCred.passwordBase64, 'base64').toString('utf-8')
-                    : latestCred.password || null;
-            }
+        if (lapsResult?.credentials?.length > 0) {
+            const latestCred = lapsResult.credentials.sort(
+                (a, b) => new Date(b.backupDateTime) - new Date(a.backupDateTime)
+            )[0];
+            password = latestCred.passwordBase64
+                ? Buffer.from(latestCred.passwordBase64, 'base64').toString('utf-8')
+                : latestCred.password || null;
         }
 
         if (!password) {
