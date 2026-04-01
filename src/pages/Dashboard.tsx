@@ -30,7 +30,7 @@ const Dashboard = () => {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 const data = await res.json();
-                setDevices(data);
+                setDevices(Array.isArray(data) ? data : []);
                 setIsLoadingDevices(false);
             } catch (err) {
                 console.error("Failed to load devices", err);
