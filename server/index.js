@@ -110,9 +110,10 @@ const requireAuth = async (req, res, next) => {
 // Endpoint: Get Intune managed devices with LAPS
 app.get('/api/devices', requireAuth, async (req, res) => {
     try {
-        // Get devices from Intune that are managed
+        // Get only devices assigned to the logged-in user
+        const upn = req.user.userPrincipalName;
         const result = await callGraph(
-            '/deviceManagement/managedDevices?$select=id,deviceName,operatingSystem,osVersion,lastSyncDateTime,managedDeviceOwnerType&$filter=operatingSystem eq \'Windows\'&$top=50'
+            `/deviceManagement/managedDevices?$select=id,deviceName,operatingSystem,osVersion,lastSyncDateTime,managedDeviceOwnerType&$filter=operatingSystem eq 'Windows' and userPrincipalName eq '${upn}'&$top=50`
         );
 
         const devices = (result.value || []).map(device => {
