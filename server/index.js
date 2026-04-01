@@ -15,6 +15,9 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Trust Azure App Service proxy
+app.set('trust proxy', 1);
+
 // Security headers - disable CSP so MSAL can reach login.microsoftonline.com
 app.use(helmet({
     contentSecurityPolicy: false,
@@ -109,7 +112,7 @@ app.get('/api/devices', requireAuth, async (req, res) => {
     try {
         // Get devices from Intune that are managed
         const result = await callGraph(
-            '/deviceManagement/managedDevices?$select=id,deviceName,operatingSystem,operatingSystemVersion,lastSyncDateTime,managedDeviceOwnerType&$filter=operatingSystem eq \'Windows\'&$top=50'
+            '/deviceManagement/managedDevices?$select=id,deviceName,operatingSystem,osVersion,lastSyncDateTime,managedDeviceOwnerType&$filter=operatingSystem eq \'Windows\'&$top=50'
         );
 
         const devices = (result.value || []).map(device => {
@@ -132,7 +135,7 @@ app.get('/api/devices', requireAuth, async (req, res) => {
                 id: device.id,
                 name: name,
                 type: isServer ? 'server' : 'laptop',
-                os: device.operatingSystem + (device.operatingSystemVersion ? ` ${device.operatingSystemVersion}` : ''),
+                os: device.operatingSystem + (device.osVersion ? ` ${device.osVersion}` : ''),
                 lastSync: lastSyncStr,
                 isBreakGlass: isServer
             };
