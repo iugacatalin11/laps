@@ -87,11 +87,13 @@ async function callGraphBeta(endpoint) {
             'Content-Type': 'application/json'
         }
     });
+    const text = await response.text();
+    console.log(`[Graph Beta] ${endpoint} → ${response.status} | body: ${text.slice(0, 300)}`);
     if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Graph API error ${response.status}: ${error}`);
+        throw new Error(`Graph API error ${response.status}: ${text}`);
     }
-    return response.json();
+    if (!text || text.trim() === '') return null;
+    return JSON.parse(text);
 }
 
 // Validate user token by calling Graph /me endpoint
