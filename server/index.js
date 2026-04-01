@@ -256,9 +256,15 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
         };
 
         if (os === 'macos') {
-            // macOS: use Intune action to retrieve local admin password
-            const macResult = await callGraphBetaPost(`/deviceManagement/managedDevices/${deviceId}/retrieveMacOSManagedDeviceLocalAdminAccount`);
-            password = macResult?.adminAccountPassword || null;
+            // macOS: requires DeviceManagementManagedDevices.PrivilegedOperations.All permission
+            // If not granted, return a helpful message instead of a generic error
+            try {
+                const macResult = await callGraphBetaPost(`/deviceManagement/managedDevices/${deviceId}/retrieveMacOSManagedDeviceLocalAdminAccount`);
+                password = macResult?.adminAccountPassword || null;
+            } catch (macErr) {
+                saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: intuneDevice.deviceName, ip, status: 'ERROR', date: dateStr, reason, details: 'macOS_NOT_SUPPORTED' });
+                return res.status(503).json({ error: 'macOS LAPS retrieval requires additional configuration. Please contact IT support to get the local admin password for this Mac.' });
+            }
         } else {
             // Windows: LAPS stored in Entra ID directory
             const lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
