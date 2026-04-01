@@ -88,7 +88,6 @@ async function callGraphBeta(endpoint) {
         }
     });
     const text = await response.text();
-    console.log(`[Graph Beta] ${endpoint} → ${response.status} | body: ${text.slice(0, 300)}`);
     if (!response.ok) {
         throw new Error(`Graph API error ${response.status}: ${text}`);
     }
@@ -196,7 +195,7 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
         const entraDeviceId = intuneDevice.azureADDeviceId;
         const os = (intuneDevice.operatingSystem || '').toLowerCase();
 
-        console.log(`[LAPS] Device: ${intuneDevice.deviceName}, OS: ${os}, Entra ID: ${entraDeviceId}`);
+        console.log(`[AUDIT] LAPS request: ${intuneDevice.deviceName} by ${user.userPrincipalName}`);
 
         if (!entraDeviceId) {
             throw new Error('Device not found in Entra ID');
