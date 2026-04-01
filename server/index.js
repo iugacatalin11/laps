@@ -191,23 +191,47 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
     }
 
     try {
-        // Get LAPS password from Microsoft Graph
-        // deviceLocalCredentials uses the Entra Device ID, not Intune device ID
-        // First, get the Intune device to find the Entra Device ID
-        const intuneDevice = await callGraph(`/deviceManagement/managedDevices/${deviceId}?$select=id,deviceName,azureADDeviceId`);
+        // Get Intune device details - OS type + Entra Device ID
+        const intuneDevice = await callGraph(`/deviceManagement/managedDevices/${deviceId}?$select=id,deviceName,operatingSystem,azureADDeviceId`);
         const entraDeviceId = intuneDevice.azureADDeviceId;
+        const os = (intuneDevice.operatingSystem || '').toLowerCase();
 
-        console.log(`[LAPS] Intune device: ${intuneDevice.deviceName}, Entra ID: ${entraDeviceId}`);
+        console.log(`[LAPS] Device: ${intuneDevice.deviceName}, OS: ${os}, Entra ID: ${entraDeviceId}`);
 
         if (!entraDeviceId) {
             throw new Error('Device not found in Entra ID');
         }
 
-        // Get LAPS credentials for this device
-        console.log(`[LAPS] Fetching credentials for Entra Device ID: ${entraDeviceId}`);
-        const lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
+        let password = null;
 
-        if (!lapsResult || !lapsResult.credentials || lapsResult.credentials.length === 0) {
+        if (os === 'macos') {
+            // macOS: local admin password stored in Intune via configMgr/Intune LAPS
+            // Retrieve via Intune managedDevice action
+            console.log(`[LAPS] macOS device - fetching from Intune managedDevice`);
+            const macResult = await callGraphBeta(`/deviceManagement/managedDevices/${deviceId}?$select=id,deviceName,hardwareInformation`);
+            console.log(`[LAPS] macOS hardwareInformation: ${JSON.stringify(macResult?.hardwareInformation)}`);
+
+            // Try the dedicated macOS local admin password endpoint
+            const macPassResult = await callGraphBeta(`/deviceManagement/managedDevices/${deviceId}/retrieveLocalAdminPassword`);
+            console.log(`[LAPS] macOS password result: ${JSON.stringify(macPassResult)}`);
+
+            password = macPassResult?.localAdminPassword || macPassResult?.password || null;
+        } else {
+            // Windows: LAPS password stored in Entra ID
+            console.log(`[LAPS] Windows device - fetching from Entra deviceLocalCredentials`);
+            const lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
+
+            if (lapsResult?.credentials?.length > 0) {
+                const latestCred = lapsResult.credentials.sort(
+                    (a, b) => new Date(b.backupDateTime) - new Date(a.backupDateTime)
+                )[0];
+                password = latestCred.passwordBase64
+                    ? Buffer.from(latestCred.passwordBase64, 'base64').toString('utf-8')
+                    : latestCred.password || null;
+            }
+        }
+
+        if (!password) {
             AUDIT_LOGS.unshift({
                 id: Date.now().toString(),
                 user: user.displayName,
@@ -218,15 +242,6 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
             });
             return res.status(404).json({ error: 'LAPS is not configured for this device.' });
         }
-
-        // Get the most recent credential
-        const latestCred = lapsResult.credentials.sort(
-            (a, b) => new Date(b.backupDateTime) - new Date(a.backupDateTime)
-        )[0];
-
-        const password = latestCred.passwordBase64
-            ? Buffer.from(latestCred.passwordBase64, 'base64').toString('utf-8')
-            : latestCred.password || 'N/A';
 
         const validUntil = new Date(Date.now() + 1000 * 60 * 30).toLocaleTimeString();
 
