@@ -62,10 +62,26 @@ async function getGraphToken() {
     return tokenResponse.token;
 }
 
-// Call Microsoft Graph API
+// Call Microsoft Graph API (v1.0)
 async function callGraph(endpoint) {
     const token = await getGraphToken();
     const response = await fetch(`https://graph.microsoft.com/v1.0${endpoint}`, {
+        headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+    if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Graph API error ${response.status}: ${error}`);
+    }
+    return response.json();
+}
+
+// Call Microsoft Graph API (beta) - needed for deviceLocalCredentials
+async function callGraphBeta(endpoint) {
+    const token = await getGraphToken();
+    const response = await fetch(`https://graph.microsoft.com/beta${endpoint}`, {
         headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -184,7 +200,7 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
         }
 
         // Get LAPS credentials for this device
-        const lapsResult = await callGraph(`/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
+        const lapsResult = await callGraphBeta(`/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
 
         if (!lapsResult || !lapsResult.credentials || lapsResult.credentials.length === 0) {
             AUDIT_LOGS.unshift({
