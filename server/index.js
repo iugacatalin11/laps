@@ -1,0 +1,221 @@
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { ClientSecretCredential } from '@azure/identity';
+
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(cors());
+app.use(express.json());
+
+// Azure credential for Graph API calls (backend service account)
+const credential = new ClientSecretCredential(
+    process.env.AZURE_TENANT_ID,
+    process.env.AZURE_CLIENT_ID,
+    process.env.AZURE_CLIENT_SECRET
+);
+
+// Get a Graph API token using backend service credentials
+async function getGraphToken() {
+    const tokenResponse = await credential.getToken('https://graph.microsoft.com/.default');
+    return tokenResponse.token;
+}
+
+// Call Microsoft Graph API
+async function callGraph(endpoint) {
+    const token = await getGraphToken();
+    const response = await fetch(`https://graph.microsoft.com/v1.0${endpoint}`, {
+        headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+    if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Graph API error ${response.status}: ${error}`);
+    }
+    return response.json();
+}
+
+// Validate user token by calling Graph /me endpoint
+async function getUserFromToken(authHeader) {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        throw new Error('No authorization token provided');
+    }
+    const token = authHeader.split(' ')[1];
+    const response = await fetch('https://graph.microsoft.com/v1.0/me', {
+        headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!response.ok) {
+        throw new Error('Invalid or expired token');
+    }
+    return response.json(); // { displayName, userPrincipalName, id, ... }
+}
+
+// In-memory audit log (for now — will move to DB/Log Analytics later)
+let AUDIT_LOGS = [];
+
+// Middleware: validate user token
+const requireAuth = async (req, res, next) => {
+    try {
+        const user = await getUserFromToken(req.headers.authorization);
+        req.user = user;
+        next();
+    } catch (err) {
+        res.status(401).json({ error: 'Unauthorized. Please sign in with your Microsoft account.' });
+    }
+};
+
+// Endpoint: Get Intune managed devices with LAPS
+app.get('/api/devices', requireAuth, async (req, res) => {
+    try {
+        // Get devices from Intune that are managed
+        const result = await callGraph(
+            '/deviceManagement/managedDevices?$select=id,deviceName,operatingSystem,operatingSystemVersion,lastSyncDateTime,managedDeviceOwnerType&$filter=operatingSystem eq \'Windows\'&$top=50'
+        );
+
+        const devices = (result.value || []).map(device => {
+            const lastSync = new Date(device.lastSyncDateTime);
+            const now = new Date();
+            const diffMs = now - lastSync;
+            const diffMins = Math.floor(diffMs / 60000);
+            const diffHours = Math.floor(diffMins / 60);
+            const diffDays = Math.floor(diffHours / 24);
+
+            let lastSyncStr;
+            if (diffMins < 60) lastSyncStr = `${diffMins} min ago`;
+            else if (diffHours < 24) lastSyncStr = `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+            else lastSyncStr = `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+
+            const name = device.deviceName || 'Unknown';
+            const isServer = name.toLowerCase().includes('srv') || name.toLowerCase().includes('server');
+
+            return {
+                id: device.id,
+                name: name,
+                type: isServer ? 'server' : 'laptop',
+                os: device.operatingSystem + (device.operatingSystemVersion ? ` ${device.operatingSystemVersion}` : ''),
+                lastSync: lastSyncStr,
+                isBreakGlass: isServer
+            };
+        });
+
+        res.json(devices);
+    } catch (err) {
+        console.error('Error fetching devices:', err.message);
+        res.status(500).json({ error: 'Failed to fetch devices from Microsoft Graph.' });
+    }
+});
+
+// Endpoint: Reveal LAPS Password
+app.post('/api/laps/reveal', requireAuth, async (req, res) => {
+    const { deviceId, reason, isBreakGlass } = req.body;
+    const user = req.user;
+    const ip = req.ip === '::1' ? '127.0.0.1' : req.ip;
+    const now = new Date();
+    const dateStr = now.toISOString().replace('T', ' ').slice(0, 19);
+
+    if (!reason || reason.length < 5) {
+        AUDIT_LOGS.unshift({
+            id: Date.now().toString(),
+            user: user.displayName,
+            userEmail: user.userPrincipalName,
+            device: deviceId,
+            ip,
+            status: 'DENIED',
+            date: dateStr,
+            reason,
+            details: 'Invalid reason length'
+        });
+        return res.status(400).json({ error: 'Business justification must be at least 5 characters.' });
+    }
+
+    try {
+        // Get LAPS password from Microsoft Graph
+        // deviceLocalCredentials uses the Entra Device ID, not Intune device ID
+        // First, get the Intune device to find the Entra Device ID
+        const intuneDevice = await callGraph(`/deviceManagement/managedDevices/${deviceId}?$select=id,deviceName,azureADDeviceId`);
+        const entraDeviceId = intuneDevice.azureADDeviceId;
+
+        if (!entraDeviceId) {
+            throw new Error('Device not found in Entra ID');
+        }
+
+        // Get LAPS credentials for this device
+        const lapsResult = await callGraph(`/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
+
+        if (!lapsResult || !lapsResult.credentials || lapsResult.credentials.length === 0) {
+            AUDIT_LOGS.unshift({
+                id: Date.now().toString(),
+                user: user.displayName,
+                userEmail: user.userPrincipalName,
+                device: intuneDevice.deviceName,
+                ip, status: 'ERROR', date: dateStr, reason,
+                details: 'LAPS_NOT_CONFIGURED'
+            });
+            return res.status(404).json({ error: 'LAPS is not configured for this device.' });
+        }
+
+        // Get the most recent credential
+        const latestCred = lapsResult.credentials.sort(
+            (a, b) => new Date(b.backupDateTime) - new Date(a.backupDateTime)
+        )[0];
+
+        const password = latestCred.passwordBase64
+            ? Buffer.from(latestCred.passwordBase64, 'base64').toString('utf-8')
+            : latestCred.password || 'N/A';
+
+        const validUntil = new Date(Date.now() + 1000 * 60 * 30).toLocaleTimeString();
+
+        // Log success
+        AUDIT_LOGS.unshift({
+            id: Date.now().toString(),
+            user: user.displayName,
+            userEmail: user.userPrincipalName,
+            device: intuneDevice.deviceName,
+            ip, status: 'SUCCESS', date: dateStr, reason
+        });
+
+        console.log(`[AUDIT] ${user.displayName} (${user.userPrincipalName}) requested LAPS for ${intuneDevice.deviceName}. Reason: ${reason}`);
+
+        res.json({ password, validUntil });
+
+    } catch (err) {
+        console.error('Error fetching LAPS password:', err.message);
+        AUDIT_LOGS.unshift({
+            id: Date.now().toString(),
+            user: user.displayName,
+            userEmail: user.userPrincipalName,
+            device: deviceId,
+            ip, status: 'ERROR', date: dateStr, reason,
+            details: err.message
+        });
+        res.status(500).json({ error: 'Failed to retrieve LAPS password. ' + err.message });
+    }
+});
+
+// Endpoint: Get Audit Logs
+app.get('/api/audit', requireAuth, async (req, res) => {
+    res.json(AUDIT_LOGS);
+});
+
+// Serve React frontend in production
+if (process.env.NODE_ENV === 'production') {
+    app.use(express.static(path.join(__dirname, '../dist')));
+    app.get('*', (req, res) => {
+        res.sendFile(path.join(__dirname, '../dist', 'index.html'));
+    });
+}
+
+app.listen(PORT, () => {
+    console.log(`🚀 LAPS Portal running on port ${PORT}`);
+    console.log(`📊 Mode: ${process.env.NODE_ENV || 'development'}`);
+});
