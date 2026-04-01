@@ -269,18 +269,24 @@ app.get('/api/debug/laps-test', async (req, res) => {
         const [, payload] = token.split('.');
         const decoded = JSON.parse(Buffer.from(payload + '==', 'base64').toString());
 
-        // Try listing deviceLocalCredentials (no specific device ID)
-        const testResponse = await fetch('https://graph.microsoft.com/beta/deviceLocalCredentials?$top=1', {
-            headers: { Authorization: `Bearer ${token}` }
-        });
-        const testBody = await testResponse.json();
+        // Test multiple URL variants to find which one works
+        const urls = [
+            'https://graph.microsoft.com/beta/deviceLocalCredentials?$top=1',
+            'https://graph.microsoft.com/v1.0/deviceLocalCredentials?$top=1',
+            'https://graph.microsoft.com/beta/directory/deviceLocalCredentials?$top=1',
+        ];
+
+        const results = {};
+        for (const url of urls) {
+            const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+            results[url] = { status: r.status, body: await r.json() };
+        }
 
         res.json({
             tokenApp: decoded.app_displayname || decoded.appid,
             tokenTenant: decoded.tid,
             tokenRoles: decoded.roles || [],
-            lapsStatus: testResponse.status,
-            lapsResponse: testBody
+            urlTests: results
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
