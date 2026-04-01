@@ -15,19 +15,20 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Security headers
-app.use(helmet());
-
-// CORS - only allow same origin in production
-const allowedOrigins = process.env.NODE_ENV === 'production'
-    ? ['https://lapsview.azurewebsites.net']
-    : ['http://localhost:5173'];
-
-app.use(cors({
-    origin: allowedOrigins,
-    methods: ['GET', 'POST'],
-    allowedHeaders: ['Authorization', 'Content-Type'],
+// Security headers - disable CSP so MSAL can reach login.microsoftonline.com
+app.use(helmet({
+    contentSecurityPolicy: false,
+    crossOriginOpenerPolicy: false,
 }));
+
+// CORS - in production frontend & backend are same origin, only needed for dev
+if (process.env.NODE_ENV !== 'production') {
+    app.use(cors({
+        origin: 'http://localhost:5173',
+        methods: ['GET', 'POST'],
+        allowedHeaders: ['Authorization', 'Content-Type'],
+    }));
+}
 
 // Rate limiting - max 100 requests per 15 min per IP
 app.use('/api/', rateLimit({
