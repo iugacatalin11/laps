@@ -1,4 +1,3 @@
-import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { Shield, LayoutDashboard, History, LogOut } from 'lucide-react';
 import { useMsal } from '@azure/msal-react';

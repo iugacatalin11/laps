@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -13,7 +15,34 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// Security headers
+app.use(helmet());
+
+// CORS - only allow same origin in production
+const allowedOrigins = process.env.NODE_ENV === 'production'
+    ? ['https://lapsview.azurewebsites.net']
+    : ['http://localhost:5173'];
+
+app.use(cors({
+    origin: allowedOrigins,
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Authorization', 'Content-Type'],
+}));
+
+// Rate limiting - max 100 requests per 15 min per IP
+app.use('/api/', rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: { error: 'Too many requests, please try again later.' }
+}));
+
+// Stricter limit on LAPS reveal - max 10 per 15 min
+app.use('/api/laps/reveal', rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { error: 'Too many password requests. Please wait before trying again.' }
+}));
+
 app.use(express.json());
 
 // Azure credential for Graph API calls (backend service account)

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search, MonitorSmartphone, Server, AlertTriangle, Key, ChevronRight, X, Copy, CheckCircle2 } from 'lucide-react';
 import { useMsal } from '@azure/msal-react';
