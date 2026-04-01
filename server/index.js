@@ -203,7 +203,7 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
 
         // Get LAPS credentials for this device
         console.log(`[LAPS] Fetching credentials for Entra Device ID: ${entraDeviceId}`);
-        const lapsResult = await callGraphBeta(`/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
+        const lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
 
         if (!lapsResult || !lapsResult.credentials || lapsResult.credentials.length === 0) {
             AUDIT_LOGS.unshift({
@@ -260,38 +260,6 @@ app.get('/api/audit', requireAuth, async (req, res) => {
     res.json(AUDIT_LOGS);
 });
 
-// Diagnostic endpoint - test Application token against Graph beta
-app.get('/api/debug/laps-test', async (req, res) => {
-    try {
-        const token = await getGraphToken();
-
-        // Decode JWT to see what app/permissions are in the token
-        const [, payload] = token.split('.');
-        const decoded = JSON.parse(Buffer.from(payload + '==', 'base64').toString());
-
-        // Test multiple URL variants to find which one works
-        const urls = [
-            'https://graph.microsoft.com/beta/deviceLocalCredentials?$top=1',
-            'https://graph.microsoft.com/v1.0/deviceLocalCredentials?$top=1',
-            'https://graph.microsoft.com/beta/directory/deviceLocalCredentials?$top=1',
-        ];
-
-        const results = {};
-        for (const url of urls) {
-            const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-            results[url] = { status: r.status, body: await r.json() };
-        }
-
-        res.json({
-            tokenApp: decoded.app_displayname || decoded.appid,
-            tokenTenant: decoded.tid,
-            tokenRoles: decoded.roles || [],
-            urlTests: results
-        });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
 
 // Serve React frontend in production
 if (process.env.NODE_ENV === 'production') {
