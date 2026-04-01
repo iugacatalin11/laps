@@ -203,16 +203,30 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
 
         let password = null;
 
-        // Get LAPS credentials from Entra ID directory
-        const lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
-
-        if (lapsResult?.credentials?.length > 0) {
-            const latestCred = lapsResult.credentials.sort(
+        // Helper to extract password from a deviceLocalCredentials result
+        const extractPassword = (result) => {
+            if (!result?.credentials?.length) return null;
+            const latest = result.credentials.sort(
                 (a, b) => new Date(b.backupDateTime) - new Date(a.backupDateTime)
             )[0];
-            password = latestCred.passwordBase64
-                ? Buffer.from(latestCred.passwordBase64, 'base64').toString('utf-8')
-                : latestCred.password || null;
+            return latest.passwordBase64
+                ? Buffer.from(latest.passwordBase64, 'base64').toString('utf-8')
+                : latest.password || null;
+        };
+
+        // Try 1: azureADDeviceId (works for Windows LAPS)
+        const r1 = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
+        password = extractPassword(r1);
+
+        // Try 2: Entra Object ID (for macOS - deviceId vs objectId can differ)
+        if (!password) {
+            const entraDevice = await callGraph(`/devices?$filter=deviceId eq '${entraDeviceId}'&$select=id,deviceId`);
+            const objectId = entraDevice?.value?.[0]?.id;
+            if (objectId && objectId !== entraDeviceId) {
+                console.log(`[AUDIT] Trying Entra Object ID: ${objectId} for ${intuneDevice.deviceName}`);
+                const r2 = await callGraphBeta(`/directory/deviceLocalCredentials/${objectId}?$select=credentials`);
+                password = extractPassword(r2);
+            }
         }
 
         if (!password) {
