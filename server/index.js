@@ -204,34 +204,16 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
 
         let password = null;
 
-        // Try multiple approaches to get LAPS credentials
-        const debugResults = {};
+        // Get LAPS credentials from Entra ID directory
+        const lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
 
-        // Approach 1: $select=credentials (standard)
-        const r1 = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
-        debugResults.selectCredentials = r1;
-
-        // Approach 2: no $select (get all fields)
-        const r2 = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}`);
-        debugResults.noSelect = r2;
-
-        // Approach 3: $select=id,deviceName,credentials
-        const r3 = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=id,deviceName,credentials`);
-        debugResults.selectAll = r3;
-
-        console.log(`[LAPS] debug results: ${JSON.stringify(debugResults)}`);
-
-        // Try to extract password from any result
-        for (const result of [r1, r2, r3]) {
-            if (result?.credentials?.length > 0) {
-                const latestCred = result.credentials.sort(
-                    (a, b) => new Date(b.backupDateTime) - new Date(a.backupDateTime)
-                )[0];
-                password = latestCred.passwordBase64
-                    ? Buffer.from(latestCred.passwordBase64, 'base64').toString('utf-8')
-                    : latestCred.password || null;
-                if (password) break;
-            }
+        if (lapsResult?.credentials?.length > 0) {
+            const latestCred = lapsResult.credentials.sort(
+                (a, b) => new Date(b.backupDateTime) - new Date(a.backupDateTime)
+            )[0];
+            password = latestCred.passwordBase64
+                ? Buffer.from(latestCred.passwordBase64, 'base64').toString('utf-8')
+                : latestCred.password || null;
         }
 
         if (!password) {
@@ -243,10 +225,7 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
                 ip, status: 'ERROR', date: dateStr, reason,
                 details: 'LAPS_NOT_CONFIGURED'
             });
-            return res.status(404).json({
-                error: 'LAPS is not configured for this device.',
-                debug: { deviceName: intuneDevice.deviceName, os, entraDeviceId, debugResults }
-            });
+            return res.status(404).json({ error: 'LAPS is not configured for this device.' });
         }
 
         const validUntil = new Date(Date.now() + 1000 * 60 * 30).toLocaleTimeString();
