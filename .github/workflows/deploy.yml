@@ -35,8 +35,7 @@ jobs:
           cp -r server deploy/server
           cp package.json deploy/package.json
           cp package-lock.json deploy/package-lock.json
-          cd deploy && npm ci --omit=dev
-          zip -r ../deploy.zip .
+          cd deploy && zip -r ../deploy.zip .
 
       - name: Deploy ZIP to Azure App Service
         uses: azure/webapps-deploy@v3
