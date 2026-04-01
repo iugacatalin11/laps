@@ -228,7 +228,16 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
                 ip, status: 'ERROR', date: dateStr, reason,
                 details: 'LAPS_NOT_CONFIGURED'
             });
-            return res.status(404).json({ error: 'LAPS is not configured for this device.' });
+            return res.status(404).json({
+                error: 'LAPS is not configured for this device.',
+                debug: {
+                    deviceName: intuneDevice.deviceName,
+                    os,
+                    entraDeviceId,
+                    lapsResultKeys: Object.keys(lapsResult || {}),
+                    credentials: lapsResult?.credentials ?? 'null/undefined'
+                }
+            });
         }
 
         const validUntil = new Date(Date.now() + 1000 * 60 * 30).toLocaleTimeString();
