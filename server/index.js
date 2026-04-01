@@ -260,6 +260,33 @@ app.get('/api/audit', requireAuth, async (req, res) => {
     res.json(AUDIT_LOGS);
 });
 
+// Diagnostic endpoint - test Application token against Graph beta
+app.get('/api/debug/laps-test', requireAuth, async (req, res) => {
+    try {
+        const token = await getGraphToken();
+
+        // Decode JWT to see what app/permissions are in the token
+        const [, payload] = token.split('.');
+        const decoded = JSON.parse(Buffer.from(payload + '==', 'base64').toString());
+
+        // Try listing deviceLocalCredentials (no specific device ID)
+        const testResponse = await fetch('https://graph.microsoft.com/beta/deviceLocalCredentials?$top=1', {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        const testBody = await testResponse.json();
+
+        res.json({
+            tokenApp: decoded.app_displayname || decoded.appid,
+            tokenTenant: decoded.tid,
+            tokenRoles: decoded.roles || [],
+            lapsStatus: testResponse.status,
+            lapsResponse: testBody
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Serve React frontend in production
 if (process.env.NODE_ENV === 'production') {
     app.use(express.static(path.join(__dirname, '../dist')));
