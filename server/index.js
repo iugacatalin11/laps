@@ -113,7 +113,7 @@ app.get('/api/devices', requireAuth, async (req, res) => {
         // Get only devices assigned to the logged-in user
         const upn = req.user.userPrincipalName;
         const result = await callGraph(
-            `/deviceManagement/managedDevices?$select=id,deviceName,operatingSystem,osVersion,lastSyncDateTime,managedDeviceOwnerType&$filter=operatingSystem eq 'Windows' and userPrincipalName eq '${upn}'&$top=50`
+            `/deviceManagement/managedDevices?$select=id,deviceName,operatingSystem,osVersion,lastSyncDateTime,managedDeviceOwnerType&$filter=userPrincipalName eq '${upn}'&$top=50`
         );
 
         const devices = (result.value || []).map(device => {
