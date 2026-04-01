@@ -204,19 +204,34 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
 
         let password = null;
 
-        // Both Windows and macOS LAPS store credentials in Entra ID directory
-        console.log(`[LAPS] OS: ${os} - fetching from Entra deviceLocalCredentials`);
-        const lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
-        console.log(`[LAPS] lapsResult keys: ${JSON.stringify(Object.keys(lapsResult || {}))}`);
-        console.log(`[LAPS] credentials: ${JSON.stringify(lapsResult?.credentials)}`);
+        // Try multiple approaches to get LAPS credentials
+        const debugResults = {};
 
-        if (lapsResult?.credentials?.length > 0) {
-            const latestCred = lapsResult.credentials.sort(
-                (a, b) => new Date(b.backupDateTime) - new Date(a.backupDateTime)
-            )[0];
-            password = latestCred.passwordBase64
-                ? Buffer.from(latestCred.passwordBase64, 'base64').toString('utf-8')
-                : latestCred.password || null;
+        // Approach 1: $select=credentials (standard)
+        const r1 = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
+        debugResults.selectCredentials = r1;
+
+        // Approach 2: no $select (get all fields)
+        const r2 = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}`);
+        debugResults.noSelect = r2;
+
+        // Approach 3: $select=id,deviceName,credentials
+        const r3 = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=id,deviceName,credentials`);
+        debugResults.selectAll = r3;
+
+        console.log(`[LAPS] debug results: ${JSON.stringify(debugResults)}`);
+
+        // Try to extract password from any result
+        for (const result of [r1, r2, r3]) {
+            if (result?.credentials?.length > 0) {
+                const latestCred = result.credentials.sort(
+                    (a, b) => new Date(b.backupDateTime) - new Date(a.backupDateTime)
+                )[0];
+                password = latestCred.passwordBase64
+                    ? Buffer.from(latestCred.passwordBase64, 'base64').toString('utf-8')
+                    : latestCred.password || null;
+                if (password) break;
+            }
         }
 
         if (!password) {
@@ -230,13 +245,7 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
             });
             return res.status(404).json({
                 error: 'LAPS is not configured for this device.',
-                debug: {
-                    deviceName: intuneDevice.deviceName,
-                    os,
-                    entraDeviceId,
-                    lapsResultKeys: Object.keys(lapsResult || {}),
-                    credentials: lapsResult?.credentials ?? 'null/undefined'
-                }
+                debug: { deviceName: intuneDevice.deviceName, os, entraDeviceId, debugResults }
             });
         }
 
