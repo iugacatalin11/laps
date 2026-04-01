@@ -36,23 +36,73 @@ const Admin = () => {
     }, []);
 
     const filteredLogs = logs.filter(log =>
-        log.device.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        log.user.toLowerCase().includes(searchTerm.toLowerCase())
+        log.device?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        log.user?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        log.userEmail?.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    const exportCSV = () => {
+        const headers = ['Date', 'User', 'Email', 'Device', 'Status', 'IP', 'Justification', 'Details'];
+        const rows = filteredLogs.map(l => [
+            l.date, l.user, l.userEmail, l.device, l.status, l.ip,
+            `"${(l.reason || '').replace(/"/g, '""')}"`,
+            `"${(l.details || '').replace(/"/g, '""')}"`
+        ]);
+        const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `laps-audit-${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    // Detect suspicious: same user >3 requests in 10 minutes
+    const suspiciousUsers = new Set(
+        Object.entries(
+            logs.reduce((acc: Record<string, number[]>, l) => {
+                if (l.status === 'SUCCESS') {
+                    if (!acc[l.userEmail]) acc[l.userEmail] = [];
+                    acc[l.userEmail].push(new Date(l.date).getTime());
+                }
+                return acc;
+            }, {})
+        )
+        .filter(([, times]) => {
+            const sorted = (times as number[]).sort((a, b) => b - a);
+            for (let i = 0; i < sorted.length - 2; i++) {
+                if (sorted[i] - sorted[i + 2] < 10 * 60 * 1000) return true;
+            }
+            return false;
+        })
+        .map(([email]) => email)
     );
 
     return (
         <div className="container animate-fade-in pt-8">
+            {suspiciousUsers.size > 0 && (
+                <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid var(--status-error)', borderRadius: '12px', padding: '1rem 1.5rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <ShieldAlert size={20} color="var(--status-error)" />
+                    <div>
+                        <strong style={{ color: 'var(--status-error)' }}>Suspicious activity detected</strong>
+                        <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                            Users with 3+ password requests in 10 min: {[...suspiciousUsers].join(', ')}
+                        </p>
+                    </div>
+                </div>
+            )}
             <div className="flex justify-between items-center mb-8">
                 <div>
                     <h2>Audit & Forensics</h2>
-                    <p>Read-only WORM logs synchronized with Azure Log Analytics.</p>
+                    <p>{logs.length} total records — persistent across restarts</p>
                 </div>
 
                 <div className="flex gap-4">
                     <button className="btn btn-secondary text-sm">
                         <Filter size={16} /> Filters
                     </button>
-                    <button className="btn btn-secondary text-sm" style={{ borderColor: 'var(--brand-primary)', color: 'var(--brand-primary)' }}>
+                    <button className="btn btn-secondary text-sm" style={{ borderColor: 'var(--brand-primary)', color: 'var(--brand-primary)' }} onClick={exportCSV}>
                         <Download size={16} /> Export CSV
                     </button>
                 </div>
@@ -98,14 +148,17 @@ const Admin = () => {
                                 </td>
                             </tr>
                         ) : filteredLogs.map(log => (
-                            <tr key={log.id}>
+                            <tr key={log.id} style={suspiciousUsers.has(log.userEmail) ? { background: 'rgba(239,68,68,0.05)' } : {}}>
                                 <td style={{ fontSize: '0.875rem' }}>{log.date}</td>
                                 <td>
                                     <div className="flex items-center gap-2">
-                                        <div style={{ width: '24px', height: '24px', background: 'var(--surface-secondary)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px' }}>
-                                            {log.user.charAt(0)}
+                                        <div style={{ width: '24px', height: '24px', background: suspiciousUsers.has(log.userEmail) ? 'rgba(239,68,68,0.2)' : 'var(--surface-secondary)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px' }}>
+                                            {log.user?.charAt(0)}
                                         </div>
-                                        {log.user}
+                                        <div>
+                                            <div>{log.user}</div>
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{log.userEmail}</div>
+                                        </div>
                                     </div>
                                 </td>
                                 <td style={{ fontWeight: 500 }}>{log.device}</td>

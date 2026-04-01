@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { ClientSecretCredential } from '@azure/identity';
 
@@ -128,8 +129,40 @@ async function getUserFromToken(authHeader) {
     return response.json(); // { displayName, userPrincipalName, id, ... }
 }
 
-// In-memory audit log (for now — will move to DB/Log Analytics later)
-let AUDIT_LOGS = [];
+// Persistent audit log - saved to file so it survives restarts
+const AUDIT_FILE = process.env.NODE_ENV === 'production'
+    ? '/home/LogFiles/laps-audit.json'
+    : path.join(__dirname, '../laps-audit.json');
+
+const ensureAuditFile = () => {
+    try {
+        const dir = path.dirname(AUDIT_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        if (!fs.existsSync(AUDIT_FILE)) fs.writeFileSync(AUDIT_FILE, '[]', 'utf8');
+    } catch {}
+};
+
+const loadAuditLogs = () => {
+    try {
+        ensureAuditFile();
+        return JSON.parse(fs.readFileSync(AUDIT_FILE, 'utf8'));
+    } catch { return []; }
+};
+
+const saveAuditLog = (entry) => {
+    try {
+        ensureAuditFile();
+        const logs = loadAuditLogs();
+        logs.unshift(entry);
+        const trimmed = logs.slice(0, 5000); // keep last 5000 entries
+        fs.writeFileSync(AUDIT_FILE, JSON.stringify(trimmed, null, 2), 'utf8');
+    } catch (err) {
+        console.error('Failed to save audit log:', err.message);
+    }
+};
+
+// Admin UPNs - IT staff who can see all logs (comma-separated in env var)
+const ADMIN_UPNS = (process.env.ADMIN_UPNS || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
 
 // Middleware: validate user token
 const requireAuth = async (req, res, next) => {
@@ -193,17 +226,7 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
     const dateStr = now.toISOString().replace('T', ' ').slice(0, 19);
 
     if (!reason || reason.length < 5) {
-        AUDIT_LOGS.unshift({
-            id: Date.now().toString(),
-            user: user.displayName,
-            userEmail: user.userPrincipalName,
-            device: deviceId,
-            ip,
-            status: 'DENIED',
-            date: dateStr,
-            reason,
-            details: 'Invalid reason length'
-        });
+        saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: deviceId, ip, status: 'DENIED', date: dateStr, reason, details: 'Invalid reason length' });
         return res.status(400).json({ error: 'Business justification must be at least 5 characters.' });
     }
 
@@ -243,49 +266,39 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
         }
 
         if (!password) {
-            AUDIT_LOGS.unshift({
-                id: Date.now().toString(),
-                user: user.displayName,
-                userEmail: user.userPrincipalName,
-                device: intuneDevice.deviceName,
-                ip, status: 'ERROR', date: dateStr, reason,
-                details: 'LAPS_NOT_CONFIGURED'
-            });
+            saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: intuneDevice.deviceName, ip, status: 'ERROR', date: dateStr, reason, details: 'LAPS_NOT_CONFIGURED' });
             return res.status(404).json({ error: 'LAPS is not configured for this device.' });
         }
 
         const validUntil = new Date(Date.now() + 1000 * 60 * 30).toLocaleTimeString();
 
-        // Log success
-        AUDIT_LOGS.unshift({
-            id: Date.now().toString(),
-            user: user.displayName,
-            userEmail: user.userPrincipalName,
-            device: intuneDevice.deviceName,
-            ip, status: 'SUCCESS', date: dateStr, reason
-        });
-
+        saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: intuneDevice.deviceName, ip, status: 'SUCCESS', date: dateStr, reason });
         console.log(`[AUDIT] ${user.displayName} (${user.userPrincipalName}) requested LAPS for ${intuneDevice.deviceName}. Reason: ${reason}`);
 
         res.json({ password, validUntil });
 
     } catch (err) {
         console.error('Error fetching LAPS password:', err.message);
-        AUDIT_LOGS.unshift({
-            id: Date.now().toString(),
-            user: user.displayName,
-            userEmail: user.userPrincipalName,
-            device: deviceId,
-            ip, status: 'ERROR', date: dateStr, reason,
-            details: err.message
-        });
+        saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: deviceId, ip, status: 'ERROR', date: dateStr, reason, details: err.message });
         res.status(500).json({ error: 'Failed to retrieve LAPS password. ' + err.message });
     }
 });
 
-// Endpoint: Get Audit Logs
+// Endpoint: Get Audit Logs - only IT admins see all logs
 app.get('/api/audit', requireAuth, async (req, res) => {
-    res.json(AUDIT_LOGS);
+    const upn = req.user.userPrincipalName?.toLowerCase();
+    const isAdmin = ADMIN_UPNS.length === 0 || ADMIN_UPNS.includes(upn);
+    if (!isAdmin) {
+        return res.status(403).json({ error: 'Access denied. Only IT administrators can view audit logs.' });
+    }
+    res.json(loadAuditLogs());
+});
+
+// Endpoint: Check if current user is admin
+app.get('/api/me', requireAuth, async (req, res) => {
+    const upn = req.user.userPrincipalName?.toLowerCase();
+    const isAdmin = ADMIN_UPNS.length === 0 || ADMIN_UPNS.includes(upn);
+    res.json({ ...req.user, isAdmin });
 });
 
 

@@ -1,10 +1,13 @@
 import { NavLink } from 'react-router-dom';
 import { Shield, LayoutDashboard, History, LogOut } from 'lucide-react';
 import { useMsal } from '@azure/msal-react';
+import { useState, useEffect } from 'react';
+import { loginRequest } from '../auth/msalConfig';
 
 const Navigation = () => {
     const { instance, accounts } = useMsal();
     const account = accounts[0];
+    const [isAdmin, setIsAdmin] = useState(false);
 
     const displayName = account?.name || account?.username || 'User';
     const email = account?.username || '';
@@ -14,6 +17,21 @@ const Navigation = () => {
         .slice(0, 2)
         .join('')
         .toUpperCase();
+
+    useEffect(() => {
+        const checkAdmin = async () => {
+            try {
+                const request = { ...loginRequest, account: accounts[0] };
+                const response = await instance.acquireTokenSilent(request);
+                const res = await fetch('/api/me', {
+                    headers: { Authorization: `Bearer ${response.accessToken}` }
+                });
+                const data = await res.json();
+                setIsAdmin(data.isAdmin === true);
+            } catch {}
+        };
+        if (accounts[0]) checkAdmin();
+    }, [accounts, instance]);
 
     const handleLogout = () => {
         instance.logoutRedirect({ postLogoutRedirectUri: window.location.origin });
@@ -37,14 +55,16 @@ const Navigation = () => {
                         My Devices
                     </NavLink>
 
-                    <NavLink
-                        to="/admin"
-                        className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                        style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
-                    >
-                        <History size={18} />
-                        Audit Logs
-                    </NavLink>
+                    {isAdmin && (
+                        <NavLink
+                            to="/admin"
+                            className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+                            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                        >
+                            <History size={18} />
+                            Audit Logs
+                        </NavLink>
+                    )}
                 </nav>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
