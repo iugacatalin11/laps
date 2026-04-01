@@ -261,7 +261,7 @@ app.get('/api/audit', requireAuth, async (req, res) => {
 });
 
 // Diagnostic endpoint - test Application token against Graph beta
-app.get('/api/debug/laps-test', requireAuth, async (req, res) => {
+app.get('/api/debug/laps-test', async (req, res) => {
     try {
         const token = await getGraphToken();
 
