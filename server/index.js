@@ -195,11 +195,14 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
         const intuneDevice = await callGraph(`/deviceManagement/managedDevices/${deviceId}?$select=id,deviceName,azureADDeviceId`);
         const entraDeviceId = intuneDevice.azureADDeviceId;
 
+        console.log(`[LAPS] Intune device: ${intuneDevice.deviceName}, Entra ID: ${entraDeviceId}`);
+
         if (!entraDeviceId) {
             throw new Error('Device not found in Entra ID');
         }
 
         // Get LAPS credentials for this device
+        console.log(`[LAPS] Fetching credentials for Entra Device ID: ${entraDeviceId}`);
         const lapsResult = await callGraphBeta(`/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
 
         if (!lapsResult || !lapsResult.credentials || lapsResult.credentials.length === 0) {
