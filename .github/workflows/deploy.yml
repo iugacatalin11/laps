@@ -19,7 +19,7 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: Install all dependencies
         run: npm ci
 
       - name: Build React frontend
@@ -28,7 +28,7 @@ jobs:
           VITE_AZURE_CLIENT_ID: ${{ secrets.VITE_AZURE_CLIENT_ID }}
           VITE_AZURE_TENANT_ID: ${{ secrets.VITE_AZURE_TENANT_ID }}
 
-      - name: Prepare deployment package
+      - name: Prepare & zip deployment package
         run: |
           mkdir -p deploy
           cp -r dist deploy/dist
@@ -36,10 +36,11 @@ jobs:
           cp package.json deploy/package.json
           cp package-lock.json deploy/package-lock.json
           cd deploy && npm ci --omit=dev
+          cd .. && zip -r deploy.zip deploy
 
-      - name: Deploy to Azure App Service
+      - name: Deploy ZIP to Azure App Service
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'lapsview'
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: deploy
+          package: deploy.zip
