@@ -78,10 +78,28 @@ async function callGraph(endpoint) {
     return response.json();
 }
 
-// Call Microsoft Graph API (beta) - needed for deviceLocalCredentials
+// Call Microsoft Graph API (beta) - GET
 async function callGraphBeta(endpoint) {
     const token = await getGraphToken();
     const response = await fetch(`https://graph.microsoft.com/beta${endpoint}`, {
+        headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+    const text = await response.text();
+    if (!response.ok) {
+        throw new Error(`Graph API error ${response.status}: ${text}`);
+    }
+    if (!text || text.trim() === '') return null;
+    return JSON.parse(text);
+}
+
+// Call Microsoft Graph API (beta) - POST action
+async function callGraphBetaPost(endpoint) {
+    const token = await getGraphToken();
+    const response = await fetch(`https://graph.microsoft.com/beta${endpoint}`, {
+        method: 'POST',
         headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -214,19 +232,14 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
                 : latest.password || null;
         };
 
-        // Try 1: azureADDeviceId (works for Windows LAPS)
-        const r1 = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
-        password = extractPassword(r1);
-
-        // Try 2: Entra Object ID (for macOS - deviceId vs objectId can differ)
-        if (!password) {
-            const entraDevice = await callGraph(`/devices?$filter=deviceId eq '${entraDeviceId}'&$select=id,deviceId`);
-            const objectId = entraDevice?.value?.[0]?.id;
-            if (objectId && objectId !== entraDeviceId) {
-                console.log(`[AUDIT] Trying Entra Object ID: ${objectId} for ${intuneDevice.deviceName}`);
-                const r2 = await callGraphBeta(`/directory/deviceLocalCredentials/${objectId}?$select=credentials`);
-                password = extractPassword(r2);
-            }
+        if (os === 'macos') {
+            // macOS: use Intune action to retrieve local admin password
+            const macResult = await callGraphBetaPost(`/deviceManagement/managedDevices/${deviceId}/retrieveMacOSManagedDeviceLocalAdminAccount`);
+            password = macResult?.adminAccountPassword || null;
+        } else {
+            // Windows: LAPS stored in Entra ID directory
+            const lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
+            password = extractPassword(lapsResult);
         }
 
         if (!password) {
