@@ -111,6 +111,24 @@ async function callGraphBeta(endpoint) {
     return JSON.parse(text);
 }
 
+// Call Microsoft Graph API (v1.0) - POST action
+async function callGraphPost(endpoint) {
+    const token = await getGraphToken();
+    const response = await fetch(`https://graph.microsoft.com/v1.0${endpoint}`, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+    const text = await response.text();
+    if (!response.ok) {
+        throw new Error(`Graph API error ${response.status}: ${text}`);
+    }
+    if (!text || text.trim() === '') return null;
+    return JSON.parse(text);
+}
+
 // Call Microsoft Graph API (beta) - POST action
 async function callGraphBetaPost(endpoint) {
     const token = await getGraphToken();
@@ -312,12 +330,22 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
             }
         }
 
-        // If still no password and device is macOS, the LAPS policy likely backs up to Intune instead of Entra
-        // Show helpful message with link to Intune and instructions to change backup destination
+        // macOS: password stored in Intune, try v1.0 POST endpoint (same as ms-sso-admin-viewer fallback)
         if (!password && os === 'macos') {
-            saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: intuneDevice.deviceName, ip, status: 'REDIRECT', date: dateStr, reason, details: 'macOS_LAPS_NOT_IN_ENTRA' });
+            try {
+                const macResult = await callGraphPost(`/deviceManagement/managedDevices/${deviceId}/getLocalAdminPassword()`);
+                console.log(`[LAPS] macOS getLocalAdminPassword response: ${JSON.stringify(macResult)?.substring(0, 300)}`);
+                password = macResult?.adminAccountPassword || macResult?.password || null;
+            } catch (macErr) {
+                console.log(`[LAPS] macOS getLocalAdminPassword failed: ${macErr.message}`);
+            }
+        }
+
+        // macOS fallback: if still no password, redirect to Intune
+        if (!password && os === 'macos') {
+            saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: intuneDevice.deviceName, ip, status: 'REDIRECT', date: dateStr, reason, details: 'macOS_LAPS_INTUNE_ONLY' });
             return res.status(404).json({
-                error: 'Parola LAPS pentru acest MacBook nu este salvată în Entra ID. Schimbă "Backup Directory" la "Azure AD" în Intune LAPS policy pentru macOS.',
+                error: 'Parola MacBook se găsește în Intune. Click pe butonul de mai jos.',
                 macosIntuneUrl: `https://intune.microsoft.com/#view/Microsoft_Intune_Devices/DeviceSettingsMenuBlade/~/localAdminPassword/mdmDeviceId/${deviceId}`
             });
         }
