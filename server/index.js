@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { ClientSecretCredential } from '@azure/identity';
+import { ClientSecretCredential, DefaultAzureCredential, ChainedTokenCredential } from '@azure/identity';
 
 dotenv.config();
 
@@ -50,12 +50,21 @@ app.use('/api/laps/reveal', rateLimit({
 
 app.use(express.json());
 
-// Azure credential for Graph API calls (backend service account)
-const credential = new ClientSecretCredential(
-    process.env.AZURE_TENANT_ID,
-    process.env.AZURE_CLIENT_ID,
-    process.env.AZURE_CLIENT_SECRET
-);
+// Azure credential for Graph API calls
+// In production: uses Managed Identity (no client secret needed - zero secret risk)
+// In development: falls back to ClientSecretCredential from .env
+let credential;
+if (process.env.NODE_ENV === 'production') {
+    credential = new DefaultAzureCredential();
+    console.log('🔐 Using Managed Identity (no client secret)');
+} else {
+    credential = new ClientSecretCredential(
+        process.env.AZURE_TENANT_ID,
+        process.env.AZURE_CLIENT_ID,
+        process.env.AZURE_CLIENT_SECRET
+    );
+    console.log('🔑 Using ClientSecretCredential (dev mode)');
+}
 
 // Get a Graph API token using backend service credentials
 async function getGraphToken() {
@@ -255,21 +264,10 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
                 : latest.password || null;
         };
 
-        if (os === 'macos') {
-            // macOS: requires DeviceManagementManagedDevices.PrivilegedOperations.All permission
-            // If not granted, return a helpful message instead of a generic error
-            try {
-                const macResult = await callGraphBetaPost(`/deviceManagement/managedDevices/${deviceId}/retrieveMacOSManagedDeviceLocalAdminAccount`);
-                password = macResult?.adminAccountPassword || null;
-            } catch (macErr) {
-                saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: intuneDevice.deviceName, ip, status: 'ERROR', date: dateStr, reason, details: 'macOS_NOT_SUPPORTED' });
-                return res.status(503).json({ error: 'macOS LAPS retrieval requires additional configuration. Please contact IT support to get the local admin password for this Mac.' });
-            }
-        } else {
-            // Windows: LAPS stored in Entra ID directory
-            const lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
-            password = extractPassword(lapsResult);
-        }
+        // Windows & macOS: LAPS password stored in Entra ID deviceLocalCredentials
+        // Same endpoint for both platforms - requires only DeviceLocalCredential.Read.All
+        const lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
+        password = extractPassword(lapsResult);
 
         if (!password) {
             saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: intuneDevice.deviceName, ip, status: 'ERROR', date: dateStr, reason, details: 'LAPS_NOT_CONFIGURED' });
