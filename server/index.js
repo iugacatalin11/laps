@@ -176,8 +176,36 @@ const saveAuditLog = (entry) => {
     }
 };
 
-// Admin UPNs - IT staff who can see all logs (comma-separated in env var)
+// Admin check - uses App Registration owners from Entra ID (requires Application.Read.All)
+// Falls back to ADMIN_UPNS env var if permission not available
 const ADMIN_UPNS = (process.env.ADMIN_UPNS || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+let appOwnerUPNs = [];
+let appOwnersLoaded = false;
+
+async function loadAppOwners() {
+    if (appOwnersLoaded) return;
+    try {
+        const clientId = process.env.AZURE_CLIENT_ID;
+        if (!clientId) return;
+        const apps = await callGraph(`/applications?$filter=appId eq '${clientId}'&$select=id`);
+        const appObjectId = apps?.value?.[0]?.id;
+        if (!appObjectId) return;
+        const owners = await callGraph(`/applications/${appObjectId}/owners?$select=userPrincipalName`);
+        appOwnerUPNs = (owners?.value || []).map(o => o.userPrincipalName?.toLowerCase()).filter(Boolean);
+        console.log(`✅ App owners loaded: ${appOwnerUPNs.join(', ')}`);
+    } catch (err) {
+        console.log(`⚠️ Could not load app owners (add Application.Read.All if needed): ${err.message}`);
+    }
+    appOwnersLoaded = true;
+}
+
+function isAdmin(upn) {
+    const u = upn?.toLowerCase();
+    if (ADMIN_UPNS.length > 0 && ADMIN_UPNS.includes(u)) return true;
+    if (appOwnerUPNs.includes(u)) return true;
+    // If no admins configured at all, deny everyone (secure default)
+    return ADMIN_UPNS.length === 0 && appOwnerUPNs.length === 0;
+}
 
 // Middleware: validate user token
 const requireAuth = async (req, res, next) => {
@@ -270,76 +298,29 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
                 : latest.password || null;
         };
 
-        // Log token permissions for debugging
-        try {
-            const token = await getGraphToken();
-            const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
-            console.log(`[LAPS TOKEN] appid=${payload.app_displayname || payload.appid} roles=${(payload.roles || []).join(', ')}`);
-        } catch {}
-
-        // Try multiple approaches to find LAPS credentials
-        // Approach 1: Use azureADDeviceId from Intune (works for Windows)
-        let lapsResult = null;
-        try {
-            const token = await getGraphToken();
-            const rawResponse = await fetch(`https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-            });
-            const rawText = await rawResponse.text();
-            console.log(`[LAPS] Approach 1: status=${rawResponse.status} entraDeviceId=${entraDeviceId} body=${rawText.substring(0, 500)}`);
-            if (rawResponse.ok && rawText && rawText.trim()) {
-                lapsResult = JSON.parse(rawText);
-            }
-        } catch (e1) {
-            console.log(`[LAPS] Approach 1 failed: ${e1.message}`);
-        }
+        // Windows & Entra LAPS: read from deviceLocalCredentials
+        // First try with $select=credentials, if empty try without $select to see full response
+        let lapsResult = await callGraph(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
         password = extractPassword(lapsResult);
 
-        // Approach 2: Look up device in Entra by deviceId, try with object ID
         if (!password) {
             try {
-                const entraDevices = await callGraph(`/devices?$filter=deviceId eq '${entraDeviceId}'&$select=id,deviceId,displayName`);
-                const entraObjectId = entraDevices?.value?.[0]?.id;
-                if (entraObjectId && entraObjectId !== entraDeviceId) {
-                    console.log(`[LAPS] Approach 2: trying Entra objectId=${entraObjectId} (deviceId was ${entraDeviceId})`);
-                    lapsResult = await callGraph(`/directory/deviceLocalCredentials/${entraObjectId}?$select=credentials`);
-                    password = extractPassword(lapsResult);
-                }
-            } catch (e2) {
-                console.log(`[LAPS] Approach 2 failed: ${e2.message}`);
+                const fullResult = await callGraph(`/directory/deviceLocalCredentials/${entraDeviceId}`);
+                console.log(`[LAPS] Full deviceLocalCredentials response: ${JSON.stringify(fullResult)?.substring(0, 500)}`);
+                password = extractPassword(fullResult);
+            } catch (e) {
+                console.log(`[LAPS] Full query failed: ${e.message}`);
             }
         }
 
-        // Approach 3: macOS - try retrieveMacOSManagedDeviceLocalAdminAccount (might work with Read.All)
+        // macOS: Intune LAPS not available without PrivilegedOperations.All
+        // If password is null and device is macOS, show helpful message
         if (!password && os === 'macos') {
-            try {
-                console.log(`[LAPS] Approach 3: trying retrieveMacOSManagedDeviceLocalAdminAccount for ${deviceId}`);
-                const macResult = await callGraphBetaPost(`/deviceManagement/managedDevices/${deviceId}/retrieveMacOSManagedDeviceLocalAdminAccount`);
-                console.log(`[LAPS] Approach 3 result: ${JSON.stringify(macResult)}`);
-                password = macResult?.adminAccountPassword || null;
-            } catch (e3) {
-                console.log(`[LAPS] Approach 3 failed: ${e3.message}`);
-            }
-        }
-
-        // Approach 4: try retrieveDeviceLocalAdminPassword (works for some configs)
-        if (!password) {
-            try {
-                console.log(`[LAPS] Approach 4: trying retrieveDeviceLocalAdminPassword for ${deviceId}`);
-                const token = await getGraphToken();
-                const r = await fetch(`https://graph.microsoft.com/beta/deviceManagement/managedDevices/${deviceId}/retrieveDeviceLocalAdminPassword`, {
-                    method: 'POST',
-                    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-                });
-                const text = await r.text();
-                console.log(`[LAPS] Approach 4: status=${r.status} body=${text.substring(0, 300)}`);
-                if (r.ok && text) {
-                    const parsed = JSON.parse(text);
-                    password = parsed?.adminAccountPassword || parsed?.password || null;
-                }
-            } catch (e4) {
-                console.log(`[LAPS] Approach 4 failed: ${e4.message}`);
-            }
+            saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: intuneDevice.deviceName, ip, status: 'REDIRECT', date: dateStr, reason, details: 'macOS_INTUNE_REDIRECT' });
+            return res.status(404).json({
+                error: 'Parola MacBook se găsește în Intune. Click pe butonul de mai jos.',
+                macosIntuneUrl: `https://intune.microsoft.com/#view/Microsoft_Intune_Devices/DeviceSettingsMenuBlade/~/localAdminPassword/mdmDeviceId/${deviceId}`
+            });
         }
 
         if (!password) {
@@ -361,11 +342,10 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
     }
 });
 
-// Endpoint: Get Audit Logs - only IT admins see all logs
+// Endpoint: Get Audit Logs - only IT admins (app owners or ADMIN_UPNS)
 app.get('/api/audit', requireAuth, async (req, res) => {
-    const upn = req.user.userPrincipalName?.toLowerCase();
-    const isAdmin = ADMIN_UPNS.length === 0 || ADMIN_UPNS.includes(upn);
-    if (!isAdmin) {
+    await loadAppOwners();
+    if (!isAdmin(req.user.userPrincipalName)) {
         return res.status(403).json({ error: 'Access denied. Only IT administrators can view audit logs.' });
     }
     res.json(loadAuditLogs());
@@ -373,9 +353,8 @@ app.get('/api/audit', requireAuth, async (req, res) => {
 
 // Endpoint: Check if current user is admin
 app.get('/api/me', requireAuth, async (req, res) => {
-    const upn = req.user.userPrincipalName?.toLowerCase();
-    const isAdmin = ADMIN_UPNS.length === 0 || ADMIN_UPNS.includes(upn);
-    res.json({ ...req.user, isAdmin });
+    await loadAppOwners();
+    res.json({ ...req.user, isAdmin: isAdmin(req.user.userPrincipalName) });
 });
 
 
