@@ -264,10 +264,21 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
                 : latest.password || null;
         };
 
-        // Windows & macOS: LAPS password stored in Entra ID deviceLocalCredentials
-        // Same endpoint for both platforms - requires only DeviceLocalCredential.Read.All
+        // Attempt 1: Entra ID deviceLocalCredentials (Windows LAPS + macOS LAPS via Entra)
+        // Requires: DeviceLocalCredential.Read.All
         const lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
         password = extractPassword(lapsResult);
+
+        // Attempt 2: Intune LAPS fallback (macOS LAPS stored in Intune, older Windows LAPS)
+        // Requires: DeviceManagementManagedDevices.Read.All (already granted)
+        if (!password) {
+            try {
+                const intuneResult = await callGraphBetaPost(`/deviceManagement/managedDevices/${deviceId}/getLocalAdminPassword()`);
+                password = intuneResult?.password || null;
+            } catch (fallbackErr) {
+                console.warn('[LAPS fallback] getLocalAdminPassword failed:', fallbackErr.message);
+            }
+        }
 
         if (!password) {
             saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: intuneDevice.deviceName, ip, status: 'ERROR', date: dateStr, reason, details: 'LAPS_NOT_CONFIGURED' });
