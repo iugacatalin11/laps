@@ -310,24 +310,35 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
             }
         }
 
-        // Approach 3: Search by device name in Entra
-        if (!password) {
+        // Approach 3: macOS - try retrieveMacOSManagedDeviceLocalAdminAccount (might work with Read.All)
+        if (!password && os === 'macos') {
             try {
-                const byName = await callGraph(`/devices?$filter=displayName eq '${intuneDevice.deviceName}'&$select=id,deviceId,displayName`);
-                for (const dev of (byName?.value || [])) {
-                    for (const tryId of [dev.deviceId, dev.id]) {
-                        if (!tryId || tryId === entraDeviceId) continue;
-                        try {
-                            console.log(`[LAPS] Approach 3: trying ${tryId} for ${dev.displayName}`);
-                            lapsResult = await callGraph(`/directory/deviceLocalCredentials/${tryId}?$select=credentials`);
-                            password = extractPassword(lapsResult);
-                            if (password) break;
-                        } catch {}
-                    }
-                    if (password) break;
-                }
+                console.log(`[LAPS] Approach 3: trying retrieveMacOSManagedDeviceLocalAdminAccount for ${deviceId}`);
+                const macResult = await callGraphBetaPost(`/deviceManagement/managedDevices/${deviceId}/retrieveMacOSManagedDeviceLocalAdminAccount`);
+                console.log(`[LAPS] Approach 3 result: ${JSON.stringify(macResult)}`);
+                password = macResult?.adminAccountPassword || null;
             } catch (e3) {
                 console.log(`[LAPS] Approach 3 failed: ${e3.message}`);
+            }
+        }
+
+        // Approach 4: try retrieveDeviceLocalAdminPassword (works for some configs)
+        if (!password) {
+            try {
+                console.log(`[LAPS] Approach 4: trying retrieveDeviceLocalAdminPassword for ${deviceId}`);
+                const token = await getGraphToken();
+                const r = await fetch(`https://graph.microsoft.com/beta/deviceManagement/managedDevices/${deviceId}/retrieveDeviceLocalAdminPassword`, {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+                });
+                const text = await r.text();
+                console.log(`[LAPS] Approach 4: status=${r.status} body=${text.substring(0, 300)}`);
+                if (r.ok && text) {
+                    const parsed = JSON.parse(text);
+                    password = parsed?.adminAccountPassword || parsed?.password || null;
+                }
+            } catch (e4) {
+                console.log(`[LAPS] Approach 4 failed: ${e4.message}`);
             }
         }
 
