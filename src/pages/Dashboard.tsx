@@ -11,7 +11,7 @@ const Dashboard = () => {
     const [selectedDevice, setSelectedDevice] = useState<any>(null);
     const [reason, setReason] = useState('');
     const [isRequesting, setIsRequesting] = useState(false);
-    const [passwordData, setPasswordData] = useState<{ password?: string, validUntil?: string, error?: string } | null>(null);
+    const [passwordData, setPasswordData] = useState<{ password?: string, validUntil?: string, error?: string, macosIntuneUrl?: string } | null>(null);
     const [copied, setCopied] = useState(false);
 
     const { instance, accounts } = useMsal();
@@ -66,7 +66,7 @@ const Dashboard = () => {
             setIsRequesting(false);
 
             if (!res.ok) {
-                setPasswordData({ error: data.error || 'Server error occurred' });
+                setPasswordData({ error: data.error || 'Server error occurred', macosIntuneUrl: data.macosIntuneUrl });
                 return;
             }
 
@@ -324,15 +324,40 @@ const Dashboard = () => {
                                 </>
                             ) : passwordData.error ? (
                                 <div className="animate-fade-in text-center py-4">
-                                    <div style={{ width: '48px', height: '48px', background: 'var(--status-error-bg)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1rem', color: 'var(--status-error)' }}>
-                                        <AlertTriangle size={24} />
-                                    </div>
-                                    <h4 style={{ color: 'var(--status-error)', marginBottom: '1rem' }}>Request Denied</h4>
-                                    <p style={{ color: 'var(--text-secondary)' }}>{passwordData.error}</p>
-
-                                    <button className="btn btn-secondary w-full mt-6" onClick={() => setPasswordData(null)}>
-                                        Try Again
-                                    </button>
+                                    {passwordData.macosIntuneUrl ? (
+                                        <>
+                                            <div style={{ width: '64px', height: '64px', background: 'rgba(59,130,246,0.15)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1rem' }}>
+                                                <span style={{ fontSize: '2rem' }}>🍎</span>
+                                            </div>
+                                            <h4 style={{ marginBottom: '0.5rem' }}>MacBook — Intune LAPS</h4>
+                                            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
+                                                Parola acestui MacBook este gestionată prin Intune. Deschide direct pagina dispozitivului pentru a o vedea.
+                                            </p>
+                                            <a
+                                                href={passwordData.macosIntuneUrl}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="btn btn-primary w-full"
+                                                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', textDecoration: 'none' }}
+                                            >
+                                                Deschide în Intune Portal
+                                            </a>
+                                            <button className="btn btn-secondary w-full mt-3" onClick={() => setPasswordData(null)}>
+                                                Înapoi
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <div style={{ width: '48px', height: '48px', background: 'var(--status-error-bg)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1rem', color: 'var(--status-error)' }}>
+                                                <AlertTriangle size={24} />
+                                            </div>
+                                            <h4 style={{ color: 'var(--status-error)', marginBottom: '1rem' }}>Request Denied</h4>
+                                            <p style={{ color: 'var(--text-secondary)' }}>{passwordData.error}</p>
+                                            <button className="btn btn-secondary w-full mt-6" onClick={() => setPasswordData(null)}>
+                                                Try Again
+                                            </button>
+                                        </>
+                                    )}
                                 </div>
                             ) : (
                                 <div className="animate-fade-in text-center py-4">

@@ -270,19 +270,51 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
                 : latest.password || null;
         };
 
-        console.log(`[LAPS ID] device=${intuneDevice.deviceName} intuneId=${deviceId} entraId=${entraDeviceId} os=${os}`);
-
-        // Try v1.0 first (works in ms-sso-admin-viewer for both Windows and macOS)
-        // then fall back to beta if needed
+        // Try multiple approaches to find LAPS credentials
+        // Approach 1: Use azureADDeviceId from Intune (works for Windows)
         let lapsResult = null;
         try {
             lapsResult = await callGraph(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
-        } catch (e) {
-            console.log(`[LAPS v1.0 error] ${e.message}`);
-            lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
+        } catch (e1) {
+            console.log(`[LAPS] Approach 1 (azureADDeviceId=${entraDeviceId}) failed: ${e1.message}`);
         }
-        console.log(`[LAPS result] ${JSON.stringify(lapsResult)}`);
         password = extractPassword(lapsResult);
+
+        // Approach 2: Look up device in Entra by deviceId, try with object ID
+        if (!password) {
+            try {
+                const entraDevices = await callGraph(`/devices?$filter=deviceId eq '${entraDeviceId}'&$select=id,deviceId,displayName`);
+                const entraObjectId = entraDevices?.value?.[0]?.id;
+                if (entraObjectId && entraObjectId !== entraDeviceId) {
+                    console.log(`[LAPS] Approach 2: trying Entra objectId=${entraObjectId} (deviceId was ${entraDeviceId})`);
+                    lapsResult = await callGraph(`/directory/deviceLocalCredentials/${entraObjectId}?$select=credentials`);
+                    password = extractPassword(lapsResult);
+                }
+            } catch (e2) {
+                console.log(`[LAPS] Approach 2 failed: ${e2.message}`);
+            }
+        }
+
+        // Approach 3: Search by device name in Entra
+        if (!password) {
+            try {
+                const byName = await callGraph(`/devices?$filter=displayName eq '${intuneDevice.deviceName}'&$select=id,deviceId,displayName`);
+                for (const dev of (byName?.value || [])) {
+                    for (const tryId of [dev.deviceId, dev.id]) {
+                        if (!tryId || tryId === entraDeviceId) continue;
+                        try {
+                            console.log(`[LAPS] Approach 3: trying ${tryId} for ${dev.displayName}`);
+                            lapsResult = await callGraph(`/directory/deviceLocalCredentials/${tryId}?$select=credentials`);
+                            password = extractPassword(lapsResult);
+                            if (password) break;
+                        } catch {}
+                    }
+                    if (password) break;
+                }
+            } catch (e3) {
+                console.log(`[LAPS] Approach 3 failed: ${e3.message}`);
+            }
+        }
 
         if (!password) {
             saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: intuneDevice.deviceName, ip, status: 'ERROR', date: dateStr, reason, details: 'LAPS_NOT_CONFIGURED' });
