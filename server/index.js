@@ -35,9 +35,13 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // Rate limiting - max 100 requests per 15 min per IP
+// keyGenerator strips port from IP to fix Azure App Service proxy format (IP:port)
+const ipKeyGenerator = (req) => (req.ip || '').replace(/:\d+$/, '').replace(/^::ffff:/, '');
+
 app.use('/api/', rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 100,
+    keyGenerator: ipKeyGenerator,
     message: { error: 'Too many requests, please try again later.' }
 }));
 
@@ -45,6 +49,7 @@ app.use('/api/', rateLimit({
 app.use('/api/laps/reveal', rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
+    keyGenerator: ipKeyGenerator,
     message: { error: 'Too many password requests. Please wait before trying again.' }
 }));
 
@@ -81,11 +86,10 @@ async function callGraph(endpoint) {
             'Content-Type': 'application/json'
         }
     });
-    if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Graph API error ${response.status}: ${error}`);
-    }
-    return response.json();
+    const text = await response.text();
+    if (!response.ok) throw new Error(`Graph API error ${response.status}: ${text}`);
+    if (!text || text.trim() === '') return null;
+    return JSON.parse(text);
 }
 
 // Call Microsoft Graph API (beta) - GET
@@ -264,28 +268,15 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
                 : latest.password || null;
         };
 
-        // Attempt 1: Entra ID deviceLocalCredentials (Windows LAPS + macOS LAPS via Entra)
-        // Requires: DeviceLocalCredential.Read.All
+        // Try v1.0 first (works in ms-sso-admin-viewer for both Windows and macOS)
+        // then fall back to beta if needed
         let lapsResult = null;
         try {
+            lapsResult = await callGraph(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
+        } catch {
             lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
-            console.log(`[LAPS debug] deviceLocalCredentials result:`, JSON.stringify(lapsResult));
-        } catch (e1) {
-            console.warn('[LAPS debug] deviceLocalCredentials error:', e1.message);
         }
         password = extractPassword(lapsResult);
-
-        // Attempt 2: Intune LAPS fallback (macOS LAPS stored in Intune, older Windows LAPS)
-        // Requires: DeviceManagementManagedDevices.Read.All (already granted)
-        if (!password) {
-            try {
-                const intuneResult = await callGraphBetaPost(`/deviceManagement/managedDevices/${deviceId}/getLocalAdminPassword()`);
-                console.log(`[LAPS debug] getLocalAdminPassword result:`, JSON.stringify(intuneResult));
-                password = intuneResult?.password || null;
-            } catch (fallbackErr) {
-                console.warn('[LAPS debug] getLocalAdminPassword error:', fallbackErr.message);
-            }
-        }
 
         if (!password) {
             saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: intuneDevice.deviceName, ip, status: 'ERROR', date: dateStr, reason, details: 'LAPS_NOT_CONFIGURED' });
