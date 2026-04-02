@@ -306,19 +306,18 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
         if (!password) {
             try {
                 const fullResult = await callGraph(`/directory/deviceLocalCredentials/${entraDeviceId}`);
-                console.log(`[LAPS] Full deviceLocalCredentials response: ${JSON.stringify(fullResult)?.substring(0, 500)}`);
                 password = extractPassword(fullResult);
             } catch (e) {
-                console.log(`[LAPS] Full query failed: ${e.message}`);
+                console.log(`[LAPS] Fallback query failed for ${intuneDevice.deviceName}: ${e.message}`);
             }
         }
 
-        // macOS: Intune LAPS not available without PrivilegedOperations.All
-        // If password is null and device is macOS, show helpful message
+        // If still no password and device is macOS, the LAPS policy likely backs up to Intune instead of Entra
+        // Show helpful message with link to Intune and instructions to change backup destination
         if (!password && os === 'macos') {
-            saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: intuneDevice.deviceName, ip, status: 'REDIRECT', date: dateStr, reason, details: 'macOS_INTUNE_REDIRECT' });
+            saveAuditLog({ id: Date.now().toString(), user: user.displayName, userEmail: user.userPrincipalName, device: intuneDevice.deviceName, ip, status: 'REDIRECT', date: dateStr, reason, details: 'macOS_LAPS_NOT_IN_ENTRA' });
             return res.status(404).json({
-                error: 'Parola MacBook se găsește în Intune. Click pe butonul de mai jos.',
+                error: 'Parola LAPS pentru acest MacBook nu este salvată în Entra ID. Schimbă "Backup Directory" la "Azure AD" în Intune LAPS policy pentru macOS.',
                 macosIntuneUrl: `https://intune.microsoft.com/#view/Microsoft_Intune_Devices/DeviceSettingsMenuBlade/~/localAdminPassword/mdmDeviceId/${deviceId}`
             });
         }
