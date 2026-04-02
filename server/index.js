@@ -270,13 +270,28 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
                 : latest.password || null;
         };
 
+        // Log token permissions for debugging
+        try {
+            const token = await getGraphToken();
+            const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+            console.log(`[LAPS TOKEN] appid=${payload.app_displayname || payload.appid} roles=${(payload.roles || []).join(', ')}`);
+        } catch {}
+
         // Try multiple approaches to find LAPS credentials
         // Approach 1: Use azureADDeviceId from Intune (works for Windows)
         let lapsResult = null;
         try {
-            lapsResult = await callGraph(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
+            const token = await getGraphToken();
+            const rawResponse = await fetch(`https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`, {
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+            });
+            const rawText = await rawResponse.text();
+            console.log(`[LAPS] Approach 1: status=${rawResponse.status} entraDeviceId=${entraDeviceId} body=${rawText.substring(0, 500)}`);
+            if (rawResponse.ok && rawText && rawText.trim()) {
+                lapsResult = JSON.parse(rawText);
+            }
         } catch (e1) {
-            console.log(`[LAPS] Approach 1 (azureADDeviceId=${entraDeviceId}) failed: ${e1.message}`);
+            console.log(`[LAPS] Approach 1 failed: ${e1.message}`);
         }
         password = extractPassword(lapsResult);
 
