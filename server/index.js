@@ -42,6 +42,7 @@ app.use('/api/', rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 100,
     keyGenerator: ipKeyGenerator,
+    validate: { keyGeneratorIpFallback: false },
     message: { error: 'Too many requests, please try again later.' }
 }));
 
@@ -50,6 +51,7 @@ app.use('/api/laps/reveal', rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
     keyGenerator: ipKeyGenerator,
+    validate: { keyGeneratorIpFallback: false },
     message: { error: 'Too many password requests. Please wait before trying again.' }
 }));
 
@@ -268,14 +270,18 @@ app.post('/api/laps/reveal', requireAuth, async (req, res) => {
                 : latest.password || null;
         };
 
+        console.log(`[LAPS ID] device=${intuneDevice.deviceName} intuneId=${deviceId} entraId=${entraDeviceId} os=${os}`);
+
         // Try v1.0 first (works in ms-sso-admin-viewer for both Windows and macOS)
         // then fall back to beta if needed
         let lapsResult = null;
         try {
             lapsResult = await callGraph(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
-        } catch {
+        } catch (e) {
+            console.log(`[LAPS v1.0 error] ${e.message}`);
             lapsResult = await callGraphBeta(`/directory/deviceLocalCredentials/${entraDeviceId}?$select=credentials`);
         }
+        console.log(`[LAPS result] ${JSON.stringify(lapsResult)}`);
         password = extractPassword(lapsResult);
 
         if (!password) {
