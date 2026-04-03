@@ -31,12 +31,12 @@ function LoginPage() {
                     alignItems: 'center',
                     justifyContent: 'center',
                     margin: '0 auto 1.5rem',
-                    boxShadow: '0 10px 40px rgba(14, 165, 233, 0.3)'
+                    boxShadow: '0 10px 40px rgba(255, 208, 0, 0.25)'
                 }}>
-                    <Shield size={40} color="white" />
+                    <Shield size={40} color="#121212" />
                 </div>
                 <h1 style={{ marginBottom: '0.5rem' }}>
-                    LAPS <span style={{ color: 'var(--brand-primary)' }}>Portal</span>
+                    <span style={{ color: 'var(--brand-primary)' }}>RebelDot</span> LAPS
                 </h1>
                 <p style={{ color: 'var(--text-secondary)', maxWidth: '400px' }}>
                     Secure access to Local Administrator Password Solution.
@@ -54,7 +54,7 @@ function LoginPage() {
             </button>
 
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-                Protected by Microsoft Entra ID
+                Protected by Microsoft Entra ID | Powered by <span style={{ color: 'var(--brand-primary)', fontWeight: 600 }}>RebelDot</span>
             </p>
         </div>
     );

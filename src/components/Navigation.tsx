@@ -42,7 +42,7 @@ const Navigation = () => {
             <div className="header-content">
                 <NavLink to="/dashboard" className="brand">
                     <Shield size={28} color="var(--brand-primary)" />
-                    <span>LAPS <span style={{ color: 'var(--brand-primary)' }}>Portal</span></span>
+                    <span><span style={{ color: 'var(--brand-primary)', fontWeight: 800 }}>RebelDot</span> LAPS</span>
                 </NavLink>
 
                 <nav className="nav-links">
